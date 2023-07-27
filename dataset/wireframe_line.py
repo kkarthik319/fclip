@@ -27,6 +27,7 @@ import skimage.draw
 import matplotlib.pyplot as plt
 from docopt import docopt
 from scipy.ndimage import zoom
+from tqdm import tqdm
 
 try:
     sys.path.append(".")
@@ -77,53 +78,7 @@ def save_heatmap(prefix, image, lines):
         if np.sqrt(np.sum((vv - v) ** 2)) <= 1e-4:
             continue
         angle[vint] = np.sum((vv - v) * np.array([0., 1.])) / np.sqrt(np.sum((vv - v) ** 2))  # theta
-
-        # the junction coordinate(image coordinate system) of line can be recovered by follows:
-        # direction = [-sqrt(1-theta^2), theta]
-        # (-sqrt(1-theta^2) means the component along the r direction on the unit vector, it always negative.)
-        # center = coordinate(lcmap) + offset + 0.5
-        # J = center (+-) direction * lleng  (+-) means two end points
-
     image = cv2.resize(image, im_rescale)
-
-    # plt.figure()
-    # plt.imshow(image)
-    # for v0, v1 in lines:
-    #     plt.plot([v0[1] * 4, v1[1] * 4], [v0[0] * 4, v1[0] * 4])
-    # plt.savefig(f"dataset/{os.path.basename(prefix)}_line.png", dpi=200), plt.close()
-    # return
-
-    # coor = np.argwhere(lcmap == 1)
-    # for yx in coor:
-    #     offset = lcoff[:, int(yx[0]), int(yx[1])]
-    #     length = lleng[int(yx[0]), int(yx[1])]
-    #     theta = angle[int(yx[0]), int(yx[1])]
-    #
-    #     center = yx + offset
-    #     d = np.array([-np.sqrt(1-theta**2), theta])
-    #     plt.scatter(center[1]*4, center[0]*4, c="b")
-    #
-    #     plt.arrow(center[1]*4, center[0]*4, d[1]*length*4, d[0]*length*4,
-    #               length_includes_head=True,
-    #               head_width=15, head_length=25, fc='r', ec='b')
-
-    # plt.savefig(f"{prefix}_line.png", dpi=200), plt.close()
-
-    # plt.subplot(122), \
-    # plt.imshow(image)
-    # coor = np.argwhere(lcmap == 1)
-    # for yx in coor:
-    #     offset = lcoff[:, int(yx[0]), int(yx[1])]
-    #     length = lleng[int(yx[0]), int(yx[1])]
-    #     theta = angle[int(yx[0]), int(yx[1])]
-    #
-    #     center = yx + offset
-    #     d = np.array([-np.sqrt(1-theta**2), theta])
-    #
-    #     n0 = center + d * length
-    #     n1 = center - d * length
-    #     plt.plot([n0[1] * 4, n1[1] * 4], [n0[0] * 4, n1[0] * 4])
-    # plt.savefig(f"{prefix}_line.png", dpi=100), plt.close()
 
     np.savez_compressed(
         f"{prefix}_line.npz",
@@ -133,7 +88,7 @@ def save_heatmap(prefix, image, lines):
         lleng=lleng,
         angle=angle,
     )
-    cv2.imwrite(f"{prefix}.png", image)
+    # cv2.imwrite(f"{prefix}.png", image)
 
 
 def coor_rot90(coordinates, center, k):
@@ -169,78 +124,38 @@ def prepare_rotation(image, lines):
     return im, lines
 
 
-def main():
-    args = docopt(__doc__)
-    data_root = args["<src>"]
-    data_output = args["<dst>"]
-
-    os.makedirs(data_output, exist_ok=True)
-    for batch in ["train", "valid"]:  # "train", "valid"
-        anno_file = os.path.join(data_root, f"{batch}.json")
-
+def main(data_root):
+    for batch in ["test", "train"]:  # "train", "valid"
+        anno_file = os.path.join(data_root, f"{batch}", "annotations", "annotations.json")
         with open(anno_file, "r") as f:
             dataset = json.load(f)
+        only_need_files = set(os.listdir(f"/Users/saikrishnaseelamlakshmi/Downloads/{batch}"))
+        print("total files", len(only_need_files))
 
         def handle(data):
+            if data['filename'] not in only_need_files:
+                return
             im = cv2.imread(os.path.join(data_root, "images", data["filename"]))
-            prefix = data["filename"].split(".")[0]
-            lines = np.array(data["lines"]).reshape(-1, 2, 2)
-            os.makedirs(os.path.join(data_output, batch), exist_ok=True)
-            path = os.path.join(data_output, batch, prefix)
-
+            prefix = data["filename"]
+            lines, done = [], set()
+            for reg in data['regions']:
+                xs, ys = reg['shape_attributes']['all_points_x'], reg['shape_attributes']['all_points_y']
+                length = len(xs)
+                for i in range(length):
+                    j = (i + 1) % length
+                    x1, y1, x2, y2 = xs[i], ys[i], xs[j], ys[j]
+                    if f'{x1} {y1} {x2} {y2}' in done:
+                        continue
+                    lines.append([[xs[i], ys[i]], [xs[j], ys[j]]])
+                    done.add(f'{x1} {y1} {x2} {y2}')
+                    done.add(f'{x2} {y2} {x1} {y1}')
             lines0 = lines.copy()
-            save_heatmap(f"{path}_0", im[::, ::], lines0)
+            save_heatmap(f"./data/{batch}_gt/{prefix}", im[::, ::], np.array(lines0))
 
-            if batch != "valid":
-                lines1 = lines.copy()
-                lines1[:, :, 0] = im.shape[1] - lines1[:, :, 0]
-                im1 = im[::, ::-1]
-                save_heatmap(f"{path}_1", im1, lines1)
-
-                lines2 = lines.copy()
-                lines2[:, :, 1] = im.shape[0] - lines2[:, :, 1]
-                im2 = im[::-1, ::]
-                save_heatmap(f"{path}_2", im2, lines2)
-
-                lines3 = lines.copy()
-                lines3[:, :, 0] = im.shape[1] - lines3[:, :, 0]
-                lines3[:, :, 1] = im.shape[0] - lines3[:, :, 1]
-                im3 = im[::-1, ::-1]
-                save_heatmap(f"{path}_3", im3, lines3)
-
-                im4, lines4 = prepare_rotation(im, lines.copy())
-                lines4 = coor_rot90(lines4.reshape((-1, 2)), (im4.shape[1] / 2, im4.shape[0] / 2), 1)  # rot90 on anticlockwise
-                im4 = np.rot90(im4, k=1)  # rot90 on anticlockwise
-                save_heatmap(f"{path}_4", im4, lines4.reshape((-1, 2, 2)))
-
-                im5, lines5 = prepare_rotation(im, lines.copy())
-                lines5 = coor_rot90(lines5.reshape((-1, 2)), (im5.shape[1] / 2, im5.shape[0] / 2), 3)  # rot90 on clockwise
-                im5 = np.rot90(im5, k=-1)  # rot90 on clockwise
-                save_heatmap(f"{path}_5", im5, lines5.reshape((-1, 2, 2)))
-
-                # linesf = lines.copy()
-                # linesf[:, :, 0] = im.shape[1] - linesf[:, :, 0]
-                # im1 = im[::, ::-1]
-                # im6, lines6 = prepare_rotation(im1, linesf.copy())
-                # lines6 = coor_rot90(lines6.reshape((-1, 2)), (im6.shape[1] / 2, im6.shape[0] / 2), 1)  # rot90 on anticlockwise
-                # im6 = np.rot90(im6, k=1)  # rot90 on anticlockwise
-                # save_heatmap(f"{path}_6", im6, lines6.reshape((-1, 2, 2)))
-                #
-                # im7, lines7 = prepare_rotation(im1, linesf.copy())
-                # lines7 = coor_rot90(lines7.reshape((-1, 2)), (im7.shape[1] / 2, im7.shape[0] / 2), 3)  # rot90 on clockwise
-                # im7 = np.rot90(im7, k=-1)  # rot90 on clockwise
-                # save_heatmap(f"{path}_7", im7, lines7.reshape((-1, 2, 2)))
-
-                # exit()
-
-            print("Finishing", os.path.join(data_output, batch, prefix))
-
-        # handle(dataset[0])
-        # multiprocessing the function of handle with augment 'dataset'.
-        parmap(handle, dataset, 16)
+        for _, data in tqdm(dataset.items()):
+            handle(data)
 
 
 if __name__ == "__main__":
-
-    main()
+    main("../hawp/data/wireframe/")
 

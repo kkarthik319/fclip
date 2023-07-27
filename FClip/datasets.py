@@ -1,9 +1,11 @@
 import glob
 import cv2
+import json
+import os
 
 import numpy as np
 import torch
-from skimage import io
+from skimage import io, transform
 from torch.utils.data import Dataset
 from torch.utils.data.dataloader import default_collate
 
@@ -28,6 +30,12 @@ class LineDataset(Dataset):
         if dataset in ["shanghaiTech", "york"]:
             filelist = glob.glob(f"{rootdir}/{split}/*_label.npz")
             filelist.sort()
+        elif dataset in ['roofLine']:
+            json_file = f"../ARD/{split}.json"
+            self.images_path = f"../ARD/{split}/"
+            self.data = json.load(open(json_file))
+            filelist = [os.path.join(self.images_path, data['filename']) for data in self.data]
+            filelist.sort()
         else:
             raise ValueError("no such dataset")
 
@@ -42,6 +50,8 @@ class LineDataset(Dataset):
     def _get_im_name(self, idx):
         if self.dataset in ["shanghaiTech", "york"]:
             iname = self.filelist[idx][:-10] + ".png"
+        elif self.dataset in ['roofLine']:
+            iname = self.filelist[idx]
         else:
             raise ValueError("no such name!")
         return iname
@@ -49,16 +59,19 @@ class LineDataset(Dataset):
     def __getitem__(self, idx):
         iname = self._get_im_name(idx)
         image_ = io.imread(iname).astype(float)[:, :, :3]
+        image_ = transform.resize(image_, (512, 512))
 
         target = {}
         if M.stage1 == "fclip":
-
+            gt_path = self.filelist[idx]
+            if self.dataset == 'roofLine':
+                gt_path = f"./data/{self.split}_gt/{os.path.basename(gt_path)}_label.npz"
             # step 1 load npz
             lcmap, lcoff, lleng, angle = WireframeHuangKun.fclip_parsing(
-                self.filelist[idx].replace("label", "line"),
+                gt_path.replace("label", "line"),
                 M.ang_type
             )
-            with np.load(self.filelist[idx]) as npz:
+            with np.load(gt_path) as npz:
                 lpos = npz["lpos"][:, :, :2]
 
                 meta = {

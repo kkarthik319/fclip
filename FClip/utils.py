@@ -164,17 +164,17 @@ class ModelPrinter():
         print()
         print(
             "| ".join(
-                ["progress "]
+                ["    Type    ", "progress "]
                 + list(map("{:7}".format, loss_labels))
                 + ["speed"]
             )
         )
         with open(f"{self.out}/{csv_name}", "a") as fout:
-            print(",     ".join(["progress"] + loss_labels), file=fout)
+            print(",     ".join(["    Type    ", "progress"] + loss_labels), file=fout)
 
     def train_log(self, epoch, iteration, batch_size, time, avg_metrics):
         self.tprint(
-            f"{epoch:03}/{iteration * batch_size // 1000:04}k| "
+            f"Training - {epoch:03}/{iteration * batch_size :05} | "
             + "| ".join(map("{:.5f}".format, avg_metrics[0]))
             + f"| {4 * batch_size / (timer() - time):04.1f} "
         )
@@ -186,13 +186,13 @@ class ModelPrinter():
                 + ",".join(map("{:.6f}".format, metrics / size))
         )
         prt_str = (
-                f"{epoch:03}/{iteration * batch_size // 1000:04}k| "
+                f"{epoch:03}/{iteration * batch_size :04}| "
                 + "| ".join(map("{:.5f}".format, metrics / size))
         )
         with open(f"{self.out}/{csv_name}", "a") as fout:
             print(csv_str, file=fout)
         if isprint:
-            self.pprint(prt_str, " " * 7)
+            self.pprint("Validation - ", prt_str, " " * 7)
 
     @staticmethod
     def tprint(*args):

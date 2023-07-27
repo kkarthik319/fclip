@@ -122,11 +122,12 @@ def main():
         "pin_memory": True,
     }
     dataname = C.io.dataname
+    dataname = 'roofLine'
     train_loader = torch.utils.data.DataLoader(
         WireframeDataset(datadir, split="train", dataset=dataname), batch_size=M.batch_size, shuffle=True, drop_last=True, **kwargs
     )
     val_loader = torch.utils.data.DataLoader(
-        WireframeDataset(datadir, split="valid", dataset=dataname), batch_size=M.eval_batch_size, **kwargs
+        WireframeDataset(datadir, split="test", dataset=dataname), batch_size=M.eval_batch_size, **kwargs
     )
     epoch_size = len(train_loader)
 

@@ -165,6 +165,7 @@ class Trainer(object):
         self.model.train()
 
         time = timer()
+        epoch_size = len(self.train_loader)
 
         for batch_idx, (image, meta, target) in enumerate(self.train_loader):
 
@@ -196,11 +197,11 @@ class Trainer(object):
                     self.avg_metrics[0, len(self.loss_labels):] = self.metrics[0, len(self.loss_labels):]
 
             if self.iteration % 4 == 0:
-                self.printer.train_log(self.epoch, self.iteration, self.batch_size, time, self.avg_metrics)
+                self.printer.train_log(self.epoch, self.iteration % epoch_size, self.batch_size, time, self.avg_metrics)
 
                 time = timer()
             num_images = self.batch_size * self.iteration
-            if num_images % self.validation_interval == 0 or num_images == 60:
+            if (self.iteration + 1) % epoch_size == 0:
                 # record training loss
                 if num_images > 0:
                     self.printer.valid_log(1, self.epoch, self.iteration, self.batch_size, self.avg_metrics[0],
@@ -214,6 +215,7 @@ class Trainer(object):
         plt.rcParams["figure.figsize"] = (24, 24)
         epoch_size = len(self.train_loader)
         start_epoch = self.iteration // epoch_size
-        for self.epoch in range(start_epoch, self.max_epoch):
+        print(f"--- Epoch size is {epoch_size} & starting from epoch {start_epoch} ---")
+        for self.epoch in range(start_epoch + 1, self.max_epoch + 1):
             self.train_epoch()
             self.lr_scheduler.step()
