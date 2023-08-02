@@ -31,8 +31,8 @@ class LineDataset(Dataset):
             filelist = glob.glob(f"{rootdir}/{split}/*_label.npz")
             filelist.sort()
         elif dataset in ['roofLine']:
-            json_file = f"../ARD/{split}.json"
-            self.images_path = f"../ARD/{split}/"
+            json_file = f"../../slakshmi/ARD/{split}.json"
+            self.images_path = f"../../slakshmi/ARD/{split}/"
             self.data = json.load(open(json_file))
             filelist = [os.path.join(self.images_path, data['filename']) for data in self.data]
             filelist.sort()

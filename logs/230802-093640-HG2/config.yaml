@@ -1,0 +1,74 @@
+io:
+  datadir: /home/dxl/Data/wireframe1_datarota_3w
+  dataname: shanghaiTech
+  logdir: logs/
+  model_initialize_file: null
+  num_workers: 4
+  resume_from: logs/230802-093640-HG2
+  tensorboard_port: 0
+  validation_interval: 60000
+  visual_num: 2
+model:
+  ang_type: radian
+  backbone: stacked_hourglass
+  batch_size: 6
+  crop: true
+  crop_factor: 1.6
+  delta: 0.8
+  depth: 4
+  eval_batch_size: 2
+  head:
+    angle:
+      head_size: 1
+      loss: sigmoid_L1
+      loss_weight: 1.0
+    lcmap:
+      focal_alpha: 5.0
+      head_size: 2
+      loss: Focal_loss
+      loss_weight: 1.0
+    lcoff:
+      head_size: 2
+      loss: sigmoid_L1
+      loss_weight: 0.25
+    lleng:
+      head_size: 1
+      loss: sigmoid_L1
+      loss_weight: 3.0
+    order:
+    - lcmap
+    - lcoff
+    - lleng
+    - angle
+  head_net:
+  - raw
+  - raw
+  - raw
+  - raw
+  image:
+    mean:
+    - 109.73
+    - 103.832
+    - 98.681
+    stddev:
+    - 22.275
+    - 22.124
+    - 23.229
+  inplanes: 64
+  lformat: la
+  nlines: 1000
+  num_blocks: 1
+  num_stacks: 2
+  resolution: 128
+  s_nms: 0
+  stage1: fclip
+optim:
+  amsgrad: true
+  lr: 0.0004
+  lr_decay_epoch:
+  - 240
+  - 280
+  lr_scheduler: multi_step
+  max_epoch: 300
+  name: Adam
+  weight_decay: 0.0001
