@@ -1,4 +1,5 @@
 .idea
 build_gif.py
 draw_pr_curve.py
+data/
 __pycache__
