@@ -339,7 +339,7 @@ class FClip(nn.Module):
 
                     if math.sqrt(sum((vv - v) ** 2)) <= 1e-4:
                         continue
-                    angle_features[i] = sum((-vv + v).detach().numpy() * np.array([0., 1.])) / math.sqrt(
+                    angle_features[i] = sum((-vv + v).cpu().detach().numpy() * np.array([0., 1.])) / math.sqrt(
                         sum((vv - v) ** 2))
 
                 centre_features = centre_features / 128
