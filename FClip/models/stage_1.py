@@ -23,6 +23,16 @@ class FClip(nn.Module):
         self._get_head_size()
         self.conv1 = GCNConv(32, 32)
 
+        self.Linear1 = nn.Linear(128, 1)
+        self.Linear2 = nn.Linear(128, 16)
+        self.Linear3 = nn.Linear(5, 16)
+        self.Linear4 = nn.Linear(32, 32)
+        self.Linear5 = nn.Linear(160,128)
+        self.conv1d1 = nn.Conv1d(256, 1000, 1)
+        self.conv1d2 = nn.Conv1d(1000, 128, 1)
+        self.conv1d3 = nn.Conv1d(1000, 256, 1)
+        # self.frelu = F.relu()
+
     def _get_head_size(self):
 
         head_size = []
@@ -306,9 +316,9 @@ class FClip(nn.Module):
                 t = time.time()
 
                 #SEMANTIC FEATURES
-                semantic_features = nn.Linear(128, 1)(feature[k]).view(256,128)
-                semantic_features = nn.Linear(128,16)(semantic_features).view(256,16)
-                semantic_features = nn.Conv1d(256, 1000, 1)(semantic_features).view(1000, 16)
+                semantic_features = self.Linear1(feature[k]).view(256,128)
+                semantic_features = self.Linear2(semantic_features).view(256,16)
+                semantic_features = self.conv1d1(semantic_features).view(1000, 16)
 
                 #GEOMETRIC FEATURES
                 centre_features = np.zeros((len(lines_for_train), 2)).astype(np.float32)
@@ -335,7 +345,7 @@ class FClip(nn.Module):
                 length_features = length_features / 128
                 print('Geometrics time:', time.time() - t)
                 geometric_features = torch.cat((torch.from_numpy(centre_features),torch.from_numpy(length_features), torch.from_numpy(angle_features), score.view(1000,1)),axis=1)
-                geometric_features = nn.Linear(5,16)(geometric_features)
+                geometric_features = self.Linear3(geometric_features)
 
                 graph_features = torch.cat((semantic_features,geometric_features),axis=1)
 
@@ -347,40 +357,40 @@ class FClip(nn.Module):
 
                 #CENTRE MAP
                 t = time.time()
-                lcmap_graph = nn.Conv1d(1000, 128, 1)(graph_out).view(128, 32)
-                lcmap_graph = nn.Linear(32,32)(lcmap_graph)
+                lcmap_graph = self.conv1d2(graph_out).view(128, 32)
+                lcmap_graph = self.Linear4(lcmap_graph)
                 lcmap_graph = F.relu(lcmap_graph)
                 lcmap_graph = lcmap_graph.view(128,32)
                 lcmap_k = torch.cat((lcmap[k],lcmap_graph),axis=1)
-                lcmap[k] = nn.Linear(160,128)(lcmap_k)
+                lcmap[k] = self.Linear5(lcmap_k)
                 print('GCN-lcmap time:', time.time() - t)
 
                 #OFFSET
                 t = time.time()
-                lcoff_graph = nn.Conv1d(1000, 256, 1)(graph_out).view(2, 128, 32)
-                lcoff_graph = nn.Linear(32,32)(lcoff_graph)
+                lcoff_graph = self.conv1d3(graph_out).view(2, 128, 32)
+                lcoff_graph = self.Linear4(lcoff_graph)
                 lcoff_k = torch.cat((lcoff[k], lcoff_graph), axis=2)
-                lcoff[k] = nn.Linear(160, 128)(lcoff_k)
+                lcoff[k] = self.Linear5(lcoff_k)
                 print('GCN-lcoff time:', time.time() - t)
 
                 #LENGTH
                 t = time.time()
-                lleng_graph = nn.Conv1d(1000, 128, 1)(graph_out).view(128, 32)
-                lleng_graph = nn.Linear(32, 32)(lleng_graph)
+                lleng_graph = self.conv1d2(1000, 128, 1)(graph_out).view(128, 32)
+                lleng_graph = self.Linear4(lleng_graph)
                 lleng_graph = F.relu(lleng_graph)
                 lleng_graph = lleng_graph.view(128, 32)
                 lleng_k = torch.cat((lleng[k], lleng_graph), axis=1)
-                lleng[k] = nn.Linear(160, 128)(lleng_k)
+                lleng[k] = self.Linear5(lleng_k)
                 print('GCN-length time:', time.time() - t)
 
                 #ANGLE
                 t = time.time()
-                angle_graph = nn.Conv1d(1000, 128, 1)(graph_out).view(128, 32)
-                angle_graph = nn.Linear(32, 32)(angle_graph)
+                angle_graph = self.conv1d2(1000, 128, 1)(graph_out).view(128, 32)
+                angle_graph = self.Linear4(angle_graph)
                 angle_graph = F.relu(angle_graph)
                 angle_graph = angle_graph.view(128, 32)
                 angle_k = torch.cat((angle[k], angle_graph), axis=1)
-                angle[k] = nn.Linear(160, 128)(angle_k)
+                angle[k] = self.Linear5(angle_k)
                 print('GCN-angle time:', time.time() - t)
 
 
