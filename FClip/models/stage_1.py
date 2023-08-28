@@ -33,6 +33,7 @@ class FClip(nn.Module):
         self.conv1d3 = nn.Conv1d(1000, 256, 1)
         self.torchcat = torch.cat
         self.frelu = F.relu
+        self.torch_from_numpy = torch.from_numpy
 
     def _get_head_size(self):
 
@@ -345,7 +346,7 @@ class FClip(nn.Module):
                 centre_features = centre_features / 128
                 length_features = length_features / 128
                 print('Geometrics time:', time.time() - t)
-                geometric_features = self.torchcat((torch.from_numpy(centre_features),torch.from_numpy(length_features), torch.from_numpy(angle_features), score.view(1000,1)),axis=1)
+                geometric_features = self.torchcat((self.torch_from_numpy(centre_features),self.torch_from_numpy(length_features), self.torch_from_numpy(angle_features), score.view(1000,1)),axis=1)
                 geometric_features = self.Linear3(geometric_features)
 
                 graph_features = self.torchcat((semantic_features,geometric_features),axis=1)
