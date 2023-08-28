@@ -10,7 +10,10 @@ from FClip.line_parsing import OneStageLineParsing
 from FClip.config import M
 from FClip.losses import ce_loss, sigmoid_l1_loss, focal_loss, l12loss
 from FClip.nms import structure_nms_torch
-
+from torch_geometric.nn import GCNConv
+from torch_geometric.utils import to_networkx
+from collections import defaultdict
+import math
 
 class FClip(nn.Module):
     def __init__(self, backbone):
@@ -18,6 +21,7 @@ class FClip(nn.Module):
         self.backbone = backbone
         self.M_dic = M.to_dict()
         self._get_head_size()
+        self.conv1 = GCNConv(32, 32)
 
     def _get_head_size(self):
 
@@ -27,6 +31,8 @@ class FClip(nn.Module):
 
         self.head_off = np.cumsum([sum(h) for h in head_size])
 
+    def to_int(self,x):
+        return tuple(map(int, x))
     def lcmap_head(self, output, target):
         name = "lcmap"
 
@@ -231,7 +237,6 @@ class FClip(nn.Module):
         batch, channel, row, col = outputs[0].shape
         T = input_dict["target"].copy()
         n_jtyp = 1
-
         T["lcoff"] = T["lcoff"].permute(1, 0, 2, 3)
 
         losses = []
@@ -244,13 +249,141 @@ class FClip(nn.Module):
             heatmap = {}
             lcmap, L["lcmap"] = self.lcmap_head(output, T["lcmap"])
             lcoff, L["lcoff"] = self.lcoff_head(output, T["lcoff"], mask=T["lcmap"])
-            heatmap["lcmap"] = lcmap
-            heatmap["lcoff"] = lcoff
+            # heatmap["lcmap"] = lcmap
+            # heatmap["lcoff"] = lcoff
 
             lleng, L["lleng"] = self.lleng_head(output, T["lleng"], mask=T["lcmap"])
             angle, L["angle"] = self.angle_head(output, T["angle"], mask=T["lcmap"])
-            heatmap["lleng"] = lleng
-            heatmap["angle"] = angle
+            # heatmap["lleng"] = lleng
+            # heatmap["angle"] = angle
+
+
+            #MY PENTA
+            t = time.time()
+            lines_for_train, scores = [], []
+
+            for k in range(output.shape[1]):
+                lines_for_train, score = OneStageLineParsing.fclip_torch(
+                    lcmap=lcmap[k],
+                    lcoff=lcoff[k],
+                    lleng=lleng[k],
+                    angle=angle[k],
+                    delta=M.delta,
+                    resolution=M.resolution
+                )
+                if M.s_nms > 0:
+                    lines_for_train, score = structure_nms_torch(lines_for_train, score, M.s_nms)
+
+                lines_graph_v1 = []
+                lines_graph_v2 = []
+                vertices_hash = defaultdict(list)
+
+                # Making graph from lines
+                for idx, line in enumerate(lines_for_train):
+                    v1 = str(line[0])[7:-27]
+                    v2 = str(line[1])[7:-27]
+
+                    vertices_hash[v1].append(idx)
+                    vertices_hash[v2].append(idx)
+
+                    v1_lines = vertices_hash[v1]
+                    v2_lines = vertices_hash[v2]
+
+                    if (len(v1_lines) > 1):
+                        for line in v1_lines[:-1]:
+                            lines_graph_v1.append(line)
+                            lines_graph_v2.append(idx)
+
+                    if (len(v2_lines) > 1):
+                        for line in v2_lines[:-1]:
+                            lines_graph_v1.append(line)
+                            lines_graph_v2.append(idx)
+
+                edge_index = torch.IntTensor([lines_graph_v1, lines_graph_v2])
+                # print(edge_index)
+                print('graph creation time:', time.time() - t)
+
+                t = time.time()
+
+                #SEMANTIC FEATURES
+                semantic_features = nn.Linear(128, 1)(feature[k]).view(256,128)
+                semantic_features = nn.Linear(128,16)(semantic_features).view(256,16)
+                semantic_features = nn.Conv1d(256, 1000, 1)(semantic_features).view(1000, 16)
+
+                #GEOMETRIC FEATURES
+                centre_features = np.zeros((len(lines_for_train), 2)).astype(np.float32)
+                length_features = np.zeros((len(lines_for_train), 1)).astype(np.float32)
+                angle_features = np.zeros((len(lines_for_train), 1)).astype(np.float32)
+
+                for i, (v0, v1) in enumerate(lines_for_train):
+                    v = (v0 + v1) / 2
+                    vint = self.to_int(v)
+                    centre_features[i] = vint
+                    length_features[i] = math.sqrt(sum((v0 - v1) ** 2)) / 2
+
+                    if v0[0] <= v[0]:
+                        vv = v0
+                    else:
+                        vv = v1
+
+                    if math.sqrt(sum((vv - v) ** 2)) <= 1e-4:
+                        continue
+                    angle_features[i] = sum((-vv + v).detach().numpy() * np.array([0., 1.])) / math.sqrt(
+                        sum((vv - v) ** 2))
+
+                centre_features = centre_features / 128
+                length_features = length_features / 128
+                print('Geometrics time:', time.time() - t)
+                geometric_features = torch.cat((torch.from_numpy(centre_features),torch.from_numpy(length_features), torch.from_numpy(angle_features), score.view(1000,1)),axis=1)
+                geometric_features = nn.Linear(5,16)(geometric_features)
+
+                graph_features = torch.cat((semantic_features,geometric_features),axis=1)
+
+
+                graph_out = self.conv1(graph_features, edge_index)
+
+
+                print('GCN time:', time.time() - t)
+
+                #CENTRE MAP
+                t = time.time()
+                lcmap_graph = nn.Conv1d(1000, 128, 1)(graph_out).view(128, 32)
+                lcmap_graph = nn.Linear(32,32)(lcmap_graph)
+                lcmap_graph = F.relu(lcmap_graph)
+                lcmap_graph = lcmap_graph.view(128,32)
+                lcmap_k = torch.cat((lcmap[k],lcmap_graph),axis=1)
+                lcmap[k] = nn.Linear(160,128)(lcmap_k)
+                print('GCN-lcmap time:', time.time() - t)
+
+                #OFFSET
+                t = time.time()
+                lcoff_graph = nn.Conv1d(1000, 256, 1)(graph_out).view(2, 128, 32)
+                lcoff_graph = nn.Linear(32,32)(lcoff_graph)
+                lcoff_k = torch.cat((lcoff[k], lcoff_graph), axis=2)
+                lcoff[k] = nn.Linear(160, 128)(lcoff_k)
+                print('GCN-lcoff time:', time.time() - t)
+
+                #LENGTH
+                t = time.time()
+                lleng_graph = nn.Conv1d(1000, 128, 1)(graph_out).view(128, 32)
+                lleng_graph = nn.Linear(32, 32)(lleng_graph)
+                lleng_graph = F.relu(lleng_graph)
+                lleng_graph = lleng_graph.view(128, 32)
+                lleng_k = torch.cat((lleng[k], lleng_graph), axis=1)
+                lleng[k] = nn.Linear(160, 128)(lleng_k)
+                print('GCN-length time:', time.time() - t)
+
+                #ANGLE
+                t = time.time()
+                angle_graph = nn.Conv1d(1000, 128, 1)(graph_out).view(128, 32)
+                angle_graph = nn.Linear(32, 32)(angle_graph)
+                angle_graph = F.relu(angle_graph)
+                angle_graph = angle_graph.view(128, 32)
+                angle_k = torch.cat((angle[k], angle_graph), axis=1)
+                angle[k] = nn.Linear(160, 128)(angle_k)
+                print('GCN-angle time:', time.time() - t)
+
+
 
             losses.append(L)
             accuracy.append(Acc)
