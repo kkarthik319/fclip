@@ -14,7 +14,8 @@ from torch_geometric.nn import GCNConv
 from torch_geometric.utils import to_networkx
 from collections import defaultdict
 import math
-
+import os
+os.environ['CUDA_VISIBLE_DEVICES'] ='0'
 class FClip(nn.Module):
     def __init__(self, backbone):
         super(FClip, self).__init__()
@@ -25,7 +26,7 @@ class FClip(nn.Module):
 
         self.Linear1 = nn.Linear(128, 1)
         self.Linear2 = nn.Linear(128, 16)
-        self.Linear3 = nn.Linear(5, 16)
+        self.Linear3 = nn.Linear(4, 16)
         self.Linear4 = nn.Linear(32, 32)
         self.Linear5 = nn.Linear(160,128)
         self.conv1d1 = nn.Conv1d(256, 1000, 1)
@@ -34,7 +35,8 @@ class FClip(nn.Module):
         self.torchcat = torch.cat
         self.frelu = F.relu
         self.torch_from_numpy = torch.from_numpy
-
+        self.torchIntTensor = torch.IntTensor
+    
     def _get_head_size(self):
 
         head_size = []
@@ -286,14 +288,16 @@ class FClip(nn.Module):
                 if M.s_nms > 0:
                     lines_for_train, score = structure_nms_torch(lines_for_train, score, M.s_nms)
 
+                lines_for_train = lines_for_train.cpu()
+            
                 lines_graph_v1 = []
                 lines_graph_v2 = []
                 vertices_hash = defaultdict(list)
 
                 # Making graph from lines
                 for idx, line in enumerate(lines_for_train):
-                    v1 = str(line[0])[7:-27]
-                    v2 = str(line[1])[7:-27]
+                    v1 = str(line[0])[7:-29]
+                    v2 = str(line[1])[7:-29]
 
                     vertices_hash[v1].append(idx)
                     vertices_hash[v2].append(idx)
@@ -311,8 +315,8 @@ class FClip(nn.Module):
                             lines_graph_v1.append(line)
                             lines_graph_v2.append(idx)
 
-                edge_index = torch.IntTensor([lines_graph_v1, lines_graph_v2])
-                # print(edge_index)
+                edge_index = self.torchIntTensor([lines_graph_v1, lines_graph_v2] )
+                print(len(lines_graph_v1))
                 print('graph creation time:', time.time() - t)
 
                 t = time.time()
@@ -340,19 +344,21 @@ class FClip(nn.Module):
 
                     if math.sqrt(sum((vv - v) ** 2)) <= 1e-4:
                         continue
-                    angle_features[i] = sum((-vv + v).cpu().detach().numpy() * np.array([0., 1.])) / math.sqrt(
+                    angle_features[i] = sum((-vv + v).detach().numpy() * np.array([0., 1.])) / math.sqrt(
                         sum((vv - v) ** 2))
 
                 centre_features = centre_features / 128
                 length_features = length_features / 128
                 print('Geometrics time:', time.time() - t)
-                geometric_features = self.torchcat((self.torch_from_numpy(centre_features),self.torch_from_numpy(length_features), self.torch_from_numpy(angle_features), score.view(1000,1)),axis=1)
-                geometric_features = self.Linear3(geometric_features)
+                #geometric_features = self.torchcat((self.torch_from_numpy(centre_features),self.torch_from_numpy(length_features), self.torch_from_numpy(angle_features)),axis=1)
+                geometric_features = self.Linear3(self.torchcat((self.torch_from_numpy(centre_features).cuda(),self.torch_from_numpy(length_features).cuda(), self.torch_from_numpy(angle_features).cuda()),axis=1))
 
                 graph_features = self.torchcat((semantic_features,geometric_features),axis=1)
 
-
-                graph_out = self.conv1(graph_features, edge_index)
+                #print('semantic features:',semantic_features.device)
+                #print('edge index cpu:',self.edge_index.cpu().device)
+                #print('edge index cuda:',self.edge_index.cuda().device)
+                graph_out = self.conv1(graph_features, edge_index.cuda())
 
 
                 print('GCN time:', time.time() - t)
