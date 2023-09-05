@@ -22,6 +22,7 @@ class FClip(nn.Module):
         self.backbone = backbone
         self.M_dic = M.to_dict()
         self._get_head_size()
+        self.top_lines = 40
         self.conv1 = GCNConv(32, 32)
 
         self.Linear1 = nn.Linear(128, 1)
@@ -29,9 +30,9 @@ class FClip(nn.Module):
         self.Linear3 = nn.Linear(4, 16)
         self.Linear4 = nn.Linear(32, 32)
         self.Linear5 = nn.Linear(160,128)
-        self.conv1d1 = nn.Conv1d(256, 1000, 1)
-        self.conv1d2 = nn.Conv1d(1000, 128, 1)
-        self.conv1d3 = nn.Conv1d(1000, 256, 1)
+        self.conv1d1 = nn.Conv1d(256, self.top_lines, 1)
+        self.conv1d2 = nn.Conv1d(self.top_lines, 128, 1)
+        self.conv1d3 = nn.Conv1d(self.top_lines, 256, 1)
         self.torchcat = torch.cat
         self.frelu = F.relu
         self.torch_from_numpy = torch.from_numpy
@@ -197,6 +198,7 @@ class FClip(nn.Module):
         else:
             return self.trainval_forward(input_dict)
 
+    """
     def test_forward(self, input_dict):
 
         extra_info = {
@@ -242,7 +244,7 @@ class FClip(nn.Module):
             heatmap["lines"] = torch.cat(lines)
             heatmap["score"] = torch.cat(scores)
         return {'heatmaps': heatmap, 'extra_info': extra_info}
-
+    """
     def trainval_forward(self, input_dict):
 
         image = input_dict["image"]
@@ -263,15 +265,15 @@ class FClip(nn.Module):
             heatmap = {}
             lcmap, L["lcmap"] = self.lcmap_head(output, T["lcmap"])
             lcoff, L["lcoff"] = self.lcoff_head(output, T["lcoff"], mask=T["lcmap"])
-            # heatmap["lcmap"] = lcmap
-            # heatmap["lcoff"] = lcoff
+            #heatmap["lcmap"] = lcmap
+            #heatmap["lcoff"] = lcoff
 
             lleng, L["lleng"] = self.lleng_head(output, T["lleng"], mask=T["lcmap"])
             angle, L["angle"] = self.angle_head(output, T["angle"], mask=T["lcmap"])
-            # heatmap["lleng"] = lleng
-            # heatmap["angle"] = angle
+            #heatmap["lleng"] = lleng
+            #heatmap["angle"] = angle
 
-
+            
             #MY PENTA
             t = time.time()
             lines_for_train, scores = [], []
@@ -289,15 +291,18 @@ class FClip(nn.Module):
                     lines_for_train, score = structure_nms_torch(lines_for_train, score, M.s_nms)
 
                 lines_for_train = lines_for_train.cpu()
-            
+                lines_for_train = lines_for_train[:self.top_lines]
                 lines_graph_v1 = []
                 lines_graph_v2 = []
                 vertices_hash = defaultdict(list)
 
                 # Making graph from lines
+                rounding_decimals = 3
                 for idx, line in enumerate(lines_for_train):
-                    v1 = str(line[0])[7:-29]
-                    v2 = str(line[1])[7:-29]
+                    #v1 = str(line[0])[7:-29]
+                    #v2 = str(line[1])[7:-29]
+                    v1 = str(line[0])[8:-(38+rounding_decimals)]+','+str(line[0])[17:-(29+rounding_decimals)]
+                    v2 = str(line[1])[8:-(38+rounding_decimals)]+','+str(line[1])[17:-(29+rounding_decimals)]
 
                     vertices_hash[v1].append(idx)
                     vertices_hash[v2].append(idx)
@@ -316,15 +321,15 @@ class FClip(nn.Module):
                             lines_graph_v2.append(idx)
 
                 edge_index = self.torchIntTensor([lines_graph_v1, lines_graph_v2] )
-                print(len(lines_graph_v1))
-                print('graph creation time:', time.time() - t)
+                #print(len(lines_graph_v1))
+                #print('graph creation time:', time.time() - t)
 
                 t = time.time()
 
                 #SEMANTIC FEATURES
                 semantic_features = self.Linear1(feature[k]).view(256,128)
                 semantic_features = self.Linear2(semantic_features).view(256,16)
-                semantic_features = self.conv1d1(semantic_features).view(1000, 16)
+                semantic_features = self.conv1d1(semantic_features).view(self.top_lines, 16)
 
                 #GEOMETRIC FEATURES
                 centre_features = np.zeros((len(lines_for_train), 2)).astype(np.float32)
@@ -349,7 +354,7 @@ class FClip(nn.Module):
 
                 centre_features = centre_features / 128
                 length_features = length_features / 128
-                print('Geometrics time:', time.time() - t)
+                #print('Geometrics time:', time.time() - t)
                 #geometric_features = self.torchcat((self.torch_from_numpy(centre_features),self.torch_from_numpy(length_features), self.torch_from_numpy(angle_features)),axis=1)
                 geometric_features = self.Linear3(self.torchcat((self.torch_from_numpy(centre_features).cuda(),self.torch_from_numpy(length_features).cuda(), self.torch_from_numpy(angle_features).cuda()),axis=1))
 
@@ -361,7 +366,7 @@ class FClip(nn.Module):
                 graph_out = self.conv1(graph_features, edge_index.cuda())
 
 
-                print('GCN time:', time.time() - t)
+                #print('GCN time:', time.time() - t)
 
                 #CENTRE MAP
                 t = time.time()
@@ -371,7 +376,7 @@ class FClip(nn.Module):
                 lcmap_graph = lcmap_graph.view(128,32)
                 lcmap_k = self.torchcat((lcmap[k],lcmap_graph),axis=1)
                 lcmap[k] = self.Linear5(lcmap_k)
-                print('GCN-lcmap time:', time.time() - t)
+                #print('GCN-lcmap time:', time.time() - t)
 
                 #OFFSET
                 t = time.time()
@@ -379,7 +384,7 @@ class FClip(nn.Module):
                 lcoff_graph = self.Linear4(lcoff_graph)
                 lcoff_k = self.torchcat((lcoff[k], lcoff_graph), axis=2)
                 lcoff[k] = self.Linear5(lcoff_k)
-                print('GCN-lcoff time:', time.time() - t)
+                #print('GCN-lcoff time:', time.time() - t)
 
                 #LENGTH
                 t = time.time()
@@ -389,7 +394,7 @@ class FClip(nn.Module):
                 lleng_graph = lleng_graph.view(128, 32)
                 lleng_k = self.torchcat((lleng[k], lleng_graph), axis=1)
                 lleng[k] = self.Linear5(lleng_k)
-                print('GCN-length time:', time.time() - t)
+                #print('GCN-length time:', time.time() - t)
 
                 #ANGLE
                 t = time.time()
@@ -399,9 +404,13 @@ class FClip(nn.Module):
                 angle_graph = angle_graph.view(128, 32)
                 angle_k = self.torchcat((angle[k], angle_graph), axis=1)
                 angle[k] = self.Linear5(angle_k)
-                print('GCN-angle time:', time.time() - t)
+                #print('GCN-angle time:', time.time() - t)
 
 
+            heatmap["lcmap"] = lcmap
+            heatmap["lcoff"] = lcoff
+            heatmap["lleng"] = lleng
+            heatmap["angle"] = angle
 
             losses.append(L)
             accuracy.append(Acc)
