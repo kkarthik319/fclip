@@ -27,15 +27,17 @@ from tqdm import tqdm
 # python eval-sAP.py -m shanghaiTech path/to/npz/directories
 
 
-def line_center_score(path, GT, threshold=5):
+def line_center_score(path, GT, threshold=5, confidence_threshold=0.675, csv_file_path="temp.txt"):
     preds = sorted(glob.glob(path))
     gts = sorted(glob.glob(GT))
-
     n_gt = 0
     n_pt = 0
-    tps, fps, scores = [], [], []
+    tps, fps, scores, f1_score, precision, recall = [], [], [], [], [], []
+    csv_file = open(csv_file_path, "w")
+    csv_file.write(f"Precision, Recall, F1_score\n")
 
     for pred_name, gt_name in tqdm(zip(preds, gts)):
+        #print(pred_name,gt_name)
         with np.load(gt_name) as fgt:
             gt_line = fgt["lpos"][:, :, :2]
 
@@ -47,12 +49,28 @@ def line_center_score(path, GT, threshold=5):
         line = line * (128 / C.model.resolution)
 
         n_gt += len(gt_line)
+        indices = score >= confidence_threshold
+        score = score[indices]
+        line = line[indices]
+        #print(len(line),len(gt_line))
         n_pt += len(line)
         tp, fp, hit = FClip.metric.msTPFP_hit(line, gt_line, threshold)
         tps.append(tp)
         fps.append(fp)
         scores.append(score)
 
+        # Calculating F1score
+        indices = np.argsort(score)[::-1]
+        cumsum_tp = np.cumsum(np.array(tp)[indices]) / len(gt_line)
+        cumsum_fp = np.cumsum(np.array(fp)[indices]) / len(gt_line)
+        p = (cumsum_tp[-1]) / np.maximum(cumsum_tp[-1] + cumsum_fp[-1], 1e-9) if len(cumsum_tp) > 0 else 0
+        r = cumsum_tp[-1] if len(cumsum_tp) > 0 else 0
+        f1score = (2 * 100 * p * r) / (p + r + 1e-9)
+        f1_score.append(f1score)
+        precision.append(p * 100)
+        recall.append(r * 100)
+        csv_file.write(f"{p}, {r}, {f1score}\n")
+    #print(tps)
     tps = np.concatenate(tps)
     fps = np.concatenate(fps)
 
@@ -60,16 +78,21 @@ def line_center_score(path, GT, threshold=5):
     index = np.argsort(-scores)
     lcnn_tp = np.cumsum(tps[index]) / n_gt
     lcnn_fp = np.cumsum(fps[index]) / n_gt
-
-    return FClip.metric.ap(lcnn_tp, lcnn_fp)
+    print(path[-20:-5],FClip.metric.ap(lcnn_tp, lcnn_fp) * 100,np.mean(precision), np.mean(recall), np.mean(f1_score))
+    return FClip.metric.ap(lcnn_tp, lcnn_fp) * 100, np.mean(precision), np.mean(recall), np.mean(f1_score)
 
 
 def batch_sAP_s1(paths, GT, dataname):
     gt = GT
 
     def work(path):
-        print(f"Working on {path}")
-        return [100 * line_center_score(f"{path}/*.npz", gt, t) for t in [5, 10, 15]]
+        #print(f"Working on {path}")
+        #try:
+        fp = os.path.join(path, "results.csv")
+        return [line_center_score(f"{path}/*.npz", gt, t, csv_file_path=fp) for t in [10]]
+        #except:
+        #   print(f"Issue with {path}")
+        #  return [0, 0, 0]
 
     dirs = sorted(sum([glob.glob(p) for p in paths], []))
     results = FClip.utils.parmap(work, dirs, 8)
@@ -79,14 +102,15 @@ def batch_sAP_s1(paths, GT, dataname):
         print(f"nlines: {C.model.nlines}", file=fout)
         print(f"s_nms: {C.model.s_nms}", file=fout)
         for d, msAP in zip(dirs, results):
-            print(f"{d[-13:]}: {msAP[0]:2.1f} {msAP[1]:2.1f} {msAP[2]:2.1f}", file=fout)
+            total_epochs = int(int(d[-9:])/17796)
+            print(f"{d[-13:]}, {total_epochs} epochs : {' '.join(map(lambda x: '%2.1f'%x, msAP[0]))}", file=fout)
 
 
 def sAP_s1(path, GT):
-    sAP = [5, 10, 15]
+    sAP = [10]
     print(f"Working on {path}")
     print("sAP: ", sAP)
-    return [100 * line_center_score(f"{path}/*.npz", GT, t) for t in sAP]
+    return [line_center_score(f"{path}/*.npz", GT, t) for t in sAP]
 
 
 if __name__ == "__main__":
@@ -104,6 +128,7 @@ if __name__ == "__main__":
 
     GT_york = f"/home/dxl/Data/york/valid/*_label.npz"
     GT_huang = f"/home/dxl/Data/wireframe/valid/*_label.npz"
+    GT_roofLine = f"../../slakshmi/F-Clip/data/test_gt/*_label.npz"
 
     print(args["--mode"])
     if args["--mode"] == "shanghaiTech":
@@ -127,6 +152,13 @@ if __name__ == "__main__":
         C.model.nlines = 1000
         C.model.s_nms = 2
         batch_sAP_s1(args["<path>"], GT, args["--mode"] + "_nline1k_snms2")
+    elif args["--mode"] == "roofLine":
+        GT = GT_roofLine
+        batch_sAP_s1(args["<path>"], GT, args["--mode"])
+
+        C.model.nlines = 1000
+        C.model.s_nms = 2
+        # batch_sAP_s1(args["<path>"], GT, args["--mode"] + "_nline1k_snms2")
     else:
         print(args["--mode"])
         raise ValueError("no such dataset")

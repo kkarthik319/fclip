@@ -28,11 +28,19 @@ class FClip(nn.Module):
         self.Linear1 = nn.Linear(128, 1)
         self.Linear2 = nn.Linear(128, 16)
         self.Linear3 = nn.Linear(4, 16)
-        self.Linear4 = nn.Linear(32, 32)
-        self.Linear5 = nn.Linear(160,128)
+        self.Linear4_lcmap = nn.Linear(32, 32)
+        self.Linear4_lleng = nn.Linear(32, 32)
+        self.Linear4_lcoff = nn.Linear(32, 32)
+        self.Linear4_angle = nn.Linear(32, 32)
+        self.Linear5_lcmap = nn.Linear(160,128)
+        self.Linear5_lcoff = nn.Linear(160, 128)
+        self.Linear5_lleng = nn.Linear(160, 128)
+        self.Linear5_angle = nn.Linear(160, 128)
         self.conv1d1 = nn.Conv1d(256, self.top_lines, 1)
-        self.conv1d2 = nn.Conv1d(self.top_lines, 128, 1)
-        self.conv1d3 = nn.Conv1d(self.top_lines, 256, 1)
+        self.conv1d2_lleng = nn.Conv1d(self.top_lines, 128, 1)
+        self.conv1d2_angle = nn.Conv1d(self.top_lines, 128, 1)
+        self.conv1d3_lcmap = nn.Conv1d(self.top_lines, 256, 1)
+        self.conv1d3_lcoff = nn.Conv1d(self.top_lines, 256, 1)
         self.torchcat = torch.cat
         self.frelu = F.relu
         self.torch_from_numpy = torch.from_numpy
@@ -48,6 +56,107 @@ class FClip(nn.Module):
 
     def to_int(self,x):
         return tuple(map(int, x))
+
+    def return_lcmap(self, output):
+        name = "lcmap"
+        _, batch, row, col = output.shape
+        order = self.M_dic['head']['order']
+        offidx = order.index(name)
+        s = 0 if offidx == 0 else self.head_off[offidx - 1]
+        pred = output[s: self.head_off[offidx]].reshape(self.M_dic['head'][name]['head_size'], batch, row, col)
+        return pred.permute(1, 0, 2, 3), pred.permute(1, 0, 2, 3).softmax(1)[:, 1]
+    
+    def return_lcoff(self, output):
+        name = 'lcoff'
+
+        _, batch, row, col = output.shape
+        order = self.M_dic['head']['order']
+        offidx = order.index(name)
+        s = 0 if offidx == 0 else self.head_off[offidx - 1]
+
+        pred = output[s: self.head_off[offidx]].reshape(self.M_dic['head'][name]['head_size'], batch, row, col)
+        return pred.permute(1, 0, 2, 3), pred.permute(1, 0, 2, 3).sigmoid() - 0.5
+
+    def return_lleng(self, output):
+        name = 'lleng'
+
+        _, batch, row, col = output.shape
+        order = self.M_dic['head']['order']
+        offidx = order.index(name)
+        s = 0 if offidx == 0 else self.head_off[offidx - 1]
+        prediction =  output[s: self.head_off[offidx]].reshape(batch, row, col)
+        if self.M_dic['head'][name]['loss'] == "sigmoid_L1":
+            pred = prediction.sigmoid()
+        elif self.M_dic['head'][name]['loss'] == "L1":
+            pred = prediction.clamp(0., 1.)
+        return prediction, pred
+    
+    def return_angle(self, output):
+        name = 'angle'
+
+        _, batch, row, col = output.shape
+        order = self.M_dic['head']['order']
+        offidx = order.index(name)
+        s = 0 if offidx == 0 else self.head_off[offidx - 1]
+        prediction = output[s: self.head_off[offidx]].reshape(batch, row, col)
+        if self.M_dic['head'][name]['loss'] == "sigmoid_L1":
+            pred = prediction.sigmoid()
+        elif self.M_dic['head'][name]['loss'] == "L1":
+            pred = prediction.clamp(0., 1.)
+        return prediction, pred
+
+
+    def lcmap_loss(self, pred, target):
+        name = "lcmap"
+        if self.M_dic['head'][name]['loss'] == "Focal_loss":
+            alpha = self.M_dic['head'][name]['focal_alpha']
+            loss = focal_loss(pred, target, alpha)
+        elif self.M_dic['head'][name]['loss'] == "CE":
+            loss = ce_loss(pred, target, None)
+        else:
+            raise NotImplementedError
+
+        weight = self.M_dic['head'][name]['loss_weight']
+        return pred.softmax(1)[:, 1],loss * weight
+
+    def lcoff_loss(self, pred, target, mask):
+        name = 'lcoff'
+        loss = sum(
+            sigmoid_l1_loss(pred[j], target[j], offset=-0.5, mask=mask)
+            for j in range(2)
+        )
+
+        weight = self.M_dic['head'][name]['loss_weight']
+        return pred.sigmoid() - 0.5,loss*weight
+    
+    def lleng_loss(self, pred, target, mask):
+        name = 'lleng'
+        if self.M_dic['head'][name]['loss'] == "sigmoid_L1":
+            loss = sigmoid_l1_loss(pred, target, mask=mask)
+            pred = pred.sigmoid()
+        elif self.M_dic['head'][name]['loss'] == "L1":
+            loss = l12loss(pred, target, mask=mask)
+            pred = pred.clamp(0., 1.)
+        else:
+            raise NotImplementedError
+
+        weight = self.M_dic['head'][name]['loss_weight']
+        return pred, loss * weight
+
+    def angle_loss(self, pred, target, mask):
+        name = 'angle'
+        if self.M_dic['head'][name]['loss'] == "sigmoid_L1":
+            loss = sigmoid_l1_loss(pred, target, mask=mask)
+            pred = pred.sigmoid()
+        elif self.M_dic['head'][name]['loss'] == "L1":
+            loss = l12loss(pred, target, mask=mask)
+            pred = pred.clamp(0., 1.)
+        else:
+            raise NotImplementedError
+
+        weight = self.M_dic['head'][name]['loss_weight']
+        return pred,loss * weight
+    
     def lcmap_head(self, output, target):
         name = "lcmap"
 
@@ -263,13 +372,13 @@ class FClip(nn.Module):
             L = OrderedDict()
             Acc = OrderedDict()
             heatmap = {}
-            lcmap, L["lcmap"] = self.lcmap_head(output, T["lcmap"])
-            lcoff, L["lcoff"] = self.lcoff_head(output, T["lcoff"], mask=T["lcmap"])
+            lcmap, lcmap_for_line_parsing = self.return_lcmap(output)
+            lcoff, lcoff_for_line_parsing = self.return_lcoff(output)
             #heatmap["lcmap"] = lcmap
             #heatmap["lcoff"] = lcoff
 
-            lleng, L["lleng"] = self.lleng_head(output, T["lleng"], mask=T["lcmap"])
-            angle, L["angle"] = self.angle_head(output, T["angle"], mask=T["lcmap"])
+            lleng, lleng_for_line_parsing = self.return_lleng(output)
+            angle, angle_for_line_parsing = self.return_angle(output)
             #heatmap["lleng"] = lleng
             #heatmap["angle"] = angle
 
@@ -280,10 +389,10 @@ class FClip(nn.Module):
 
             for k in range(output.shape[1]):
                 lines_for_train, score = OneStageLineParsing.fclip_torch(
-                    lcmap=lcmap[k],
-                    lcoff=lcoff[k],
-                    lleng=lleng[k],
-                    angle=angle[k],
+                    lcmap=lcmap_for_line_parsing[k],
+                    lcoff=lcoff_for_line_parsing[k],
+                    lleng=lleng_for_line_parsing[k],
+                    angle=angle_for_line_parsing[k],
                     delta=M.delta,
                     resolution=M.resolution
                 )
@@ -370,43 +479,45 @@ class FClip(nn.Module):
 
                 #CENTRE MAP
                 t = time.time()
-                lcmap_graph = self.conv1d2(graph_out).view(128, 32)
-                lcmap_graph = self.Linear4(lcmap_graph)
+                lcmap_graph = self.conv1d3_lcmap(graph_out).view(2,128, 32)
+                lcmap_graph = self.Linear4_lcmap(lcmap_graph)
                 lcmap_graph = self.frelu(lcmap_graph)
-                lcmap_graph = lcmap_graph.view(128,32)
-                lcmap_k = self.torchcat((lcmap[k],lcmap_graph),axis=1)
-                lcmap[k] = self.Linear5(lcmap_k)
+                lcmap_k = self.torchcat((lcmap[k],lcmap_graph),axis=2)
+                lcmap[k] = self.Linear5_lcmap(lcmap_k)
                 #print('GCN-lcmap time:', time.time() - t)
 
                 #OFFSET
                 t = time.time()
-                lcoff_graph = self.conv1d3(graph_out).view(2, 128, 32)
-                lcoff_graph = self.Linear4(lcoff_graph)
+                lcoff_graph = self.conv1d3_lcoff(graph_out).view(2, 128, 32)
+                lcoff_graph = self.Linear4_lcoff(lcoff_graph)
                 lcoff_k = self.torchcat((lcoff[k], lcoff_graph), axis=2)
-                lcoff[k] = self.Linear5(lcoff_k)
+                lcoff[k] = self.Linear5_lcoff(lcoff_k)
                 #print('GCN-lcoff time:', time.time() - t)
 
                 #LENGTH
                 t = time.time()
-                lleng_graph = self.conv1d2(graph_out).view(128, 32)
-                lleng_graph = self.Linear4(lleng_graph)
+                lleng_graph = self.conv1d2_lleng(graph_out).view(128, 32)
+                lleng_graph = self.Linear4_lleng(lleng_graph)
                 lleng_graph = self.frelu(lleng_graph)
                 lleng_graph = lleng_graph.view(128, 32)
                 lleng_k = self.torchcat((lleng[k], lleng_graph), axis=1)
-                lleng[k] = self.Linear5(lleng_k)
+                lleng[k] = self.Linear5_lleng(lleng_k)
                 #print('GCN-length time:', time.time() - t)
 
                 #ANGLE
                 t = time.time()
-                angle_graph = self.conv1d2(graph_out).view(128, 32)
-                angle_graph = self.Linear4(angle_graph)
+                angle_graph = self.conv1d2_angle(graph_out).view(128, 32)
+                angle_graph = self.Linear4_angle(angle_graph)
                 angle_graph = self.frelu(angle_graph)
                 angle_graph = angle_graph.view(128, 32)
                 angle_k = self.torchcat((angle[k], angle_graph), axis=1)
-                angle[k] = self.Linear5(angle_k)
+                angle[k] = self.Linear5_angle(angle_k)
                 #print('GCN-angle time:', time.time() - t)
 
-
+            lcmap,L["lcmap"] = self.lcmap_loss(lcmap.permute(1,0,2,3), T["lcmap"])
+            lcoff,L["lcoff"] = self.lcoff_loss(lcoff.permute(1,0,2,3), T["lcoff"], mask=T["lcmap"])
+            lleng,L["lleng"] = self.lleng_loss(lleng, T["lleng"], mask=T["lcmap"])
+            angle,L["angle"] = self.angle_loss(angle, T["angle"], mask=T["lcmap"])
             heatmap["lcmap"] = lcmap
             heatmap["lcoff"] = lcoff
             heatmap["lleng"] = lleng
